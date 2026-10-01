@@ -1,0 +1,25 @@
+# Copy to music.yaml (or point MUSIC_MCP_CONFIG at a copy). Read once at start.
+
+# shortcuts in this Shortcuts folder are the presets play_music plays by name
+shortcuts_folder: Music
+
+# the account's store, and the stores searched for what it sells; the iTunes Search API
+# finds no music in some stores (China), so search one that shares its ids, e.g. tw
+storefront: us
+search_stores: [us]
+
+# music goes here when no speaker is named and nothing but the Mac itself is selected
+default_device: Living Room
+
+# AirPlay devices by their name in Music; aliases are what people call them
+devices:
+  Living Room:
+    aliases: [living room speaker, sound bar]
+    max_volume: 70
+  Bedroom TV:
+    aliases: [Apple TV, TV]
+
+# the volume a preset starts at
+presets:
+  Lullabies:
+    volume: 20

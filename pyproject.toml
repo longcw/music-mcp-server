@@ -1,0 +1,26 @@
+[project]
+name = "music-mcp-server"
+version = "0.1.0"
+description = "MCP server that plays Apple Music on a Mac's AirPlay speakers"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.28,<2",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "uvicorn>=0.29",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
