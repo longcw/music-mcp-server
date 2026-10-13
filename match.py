@@ -13,11 +13,12 @@ class NoMatch(Exception):
 
 
 # filler around a speaker's name, in English and Chinese
-_FILLER = re.compile(r"\b(my|the|on)\b|我的")
+_FILLER = re.compile(r"\b(my|the|on)\b|我?的")
 
 
 def _norm(text: str) -> str:
-    text = _FILLER.sub("", text.lower().replace("’", "'"))
+    # 音箱 and 音响 both mean speaker, and speech-to-text picks either
+    text = _FILLER.sub("", text.lower().replace("’", "'").replace("音箱", "音响"))
     return re.sub(r"[\s'_\-]+", "", text)
 
 

@@ -37,9 +37,9 @@ _LOAD_TIMEOUT = 25
 DeviceRef = Annotated[
     str | None,
     Field(
-        description="The speaker as the person names it ('living room', 'Apple TV', "
-        "'客厅音响'); list_devices has the names and aliases. Omit to keep the speaker "
-        "already playing."
+        description="The speaker in the person's own words, whole ('Apple TV', "
+        "'客厅的音箱', never cut down to the room); list_devices has the names and "
+        "aliases. Omit to keep the speaker already playing."
     ),
 ]
 

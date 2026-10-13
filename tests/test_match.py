@@ -20,6 +20,7 @@ CONFIG = {
     ("ref", "name"),
     [
         ("客厅音响", "AirPlay Living Room"),
+        ("客厅的音箱", "AirPlay Living Room"),
         ("my Apple TV", "客厅"),
         ("the living room", "AirPlay Living Room"),
         ("Sound Bar", "AirPlay Living Room"),
