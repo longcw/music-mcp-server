@@ -85,6 +85,20 @@ set current AirPlay devices to wanted""",
     )
 
 
+async def reconnect() -> None:
+    """Rebuild the sessions to the selected AirPlay speakers, silently while nothing plays.
+
+    Music keeps a speaker's session while it stays selected and, once the speaker drops
+    its end, plays into it without sound; selecting the speaker again changes nothing.
+    """
+    await osa(
+        """set wanted to current AirPlay devices
+if (count of (AirPlay devices whose selected is true and kind is not computer)) is 0 then return
+set current AirPlay devices to {first AirPlay device whose kind is computer}
+set current AirPlay devices to wanted"""
+    )
+
+
 async def master_volume() -> int:
     return int(await osa("return sound volume"))
 

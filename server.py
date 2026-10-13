@@ -254,6 +254,9 @@ async def play_music(
                 if volume is None and preset is not None:
                     volume = settings.preset_volumes.get(preset)
                 where = await _route(device, volume)
+                # stopped first, so the speakers reconnect in silence
+                await music.command("stop")
+                await music.reconnect()
                 if preset is not None:
                     await music.run_shortcut(preset)
                 else:
@@ -377,14 +380,25 @@ async def set_volume(
     return ", ".join(f"{d.name} volume {after[d.name]}" for d in targets) + "."
 
 
+async def _resume() -> None:
+    """Play on from where Music is, over fresh speaker sessions unless already playing."""
+    async with _lock:
+        if (await music.now_playing()).state != "playing":
+            await music.reconnect()
+        await music.command("play")
+
+
 @mcp.tool()
 async def control_music(
     action: Literal["pause", "resume", "next", "previous", "stop"],
 ) -> str:
     """Pause, resume, skip or stop what is playing."""
-    verb = {"resume": "play", "next": "next track", "previous": "previous track"}
+    verb = {"next": "next track", "previous": "previous track"}
     try:
-        await music.command(verb.get(action, action))
+        if action == "resume":
+            await _resume()
+        else:
+            await music.command(verb.get(action, action))
         await asyncio.sleep(1)
         return (await music.now_playing()).describe()
     except music.MusicError as exc:
@@ -448,7 +462,10 @@ async def api_control(request: Request) -> JSONResponse:
     if verb is None:
         return JSONResponse({"error": "unknown action"}, status_code=400)
     try:
-        await music.command(verb)
+        if verb == "play":
+            await _resume()
+        else:
+            await music.command(verb)
     except music.MusicError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
     if verb.endswith("track"):
