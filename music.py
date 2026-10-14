@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 
 
@@ -111,6 +112,27 @@ if (count of (AirPlay devices whose selected is true and kind is not computer)) 
 set current AirPlay devices to {first AirPlay device whose kind is computer}
 set current AirPlay devices to wanted"""
     )
+
+
+async def airplay_started(since: float) -> bool:
+    """Whether AirPlay began streaming to a speaker after the given epoch time.
+
+    Music may drop a selected speaker from its stream and play on the Mac while still
+    calling it selected; only AirPlay's own log tells.
+    """
+    start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(since))
+    out = await _run(
+        "log",
+        "show",
+        "--style",
+        "compact",
+        "--start",
+        start,
+        "--predicate",
+        'process == "AirPlayXPCHelper" AND eventMessage CONTAINS "playback state from" '
+        'AND eventMessage CONTAINS " to Started"',
+    )
+    return any(line.startswith("20") for line in out.splitlines())
 
 
 async def master_volume() -> int:

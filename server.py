@@ -130,11 +130,11 @@ async def _until_moving() -> None:
         await asyncio.sleep(0.25)
 
 
-async def _until_heard(speakers: set[str]) -> music.Playing | None:
+async def _until_heard(speakers: set[str], since: float) -> music.Playing | None:
     """Wait for the speakers to play, or None if the track stands still or Music dropped one.
 
-    Music says playing whether or not a speaker takes the stream, so this checks what it
-    does rather than what it says.
+    Music says playing, and moves on, whether or not a speaker takes the stream, so this
+    checks what AirPlay does rather than what Music says.
     """
     await _until_moving()
     before = await music.now_playing()
@@ -143,8 +143,32 @@ async def _until_heard(speakers: set[str]) -> music.Playing | None:
     moved = now.position > before.position or now.track != before.track
     if now.state != "playing" or not moved:
         return None
-    selected = {d.name for d in await music.devices() if d.selected}
-    return now if speakers <= selected else None
+    selected = [d for d in await music.devices() if d.selected]
+    if not speakers <= {d.name for d in selected}:
+        return None
+    if all(d.kind == "computer" for d in selected):
+        return now
+    # the stream starts once the speaker has buffered, a moment after Music moves on
+    for _ in range(3):
+        if await music.airplay_started(since):
+            return now
+        await asyncio.sleep(1)
+    return None
+
+
+async def _replay(speakers: set[str]) -> music.Playing | None:
+    """Play the loaded queue again over fresh speaker sessions, as switching speakers by hand does."""
+    for _ in range(2):
+        await music.command("pause")
+        await music.reconnect()
+        since = time.time()
+        await music.command("play")
+        now = await _until_heard(speakers, since)
+        if now is not None:
+            return now
+        logger.warning("replaying did not reach %s", ", ".join(speakers))
+    await music.command("pause")
+    return None
 
 
 async def _play_catalog(item: catalog.Item) -> music.Playing:
@@ -273,26 +297,26 @@ async def play_music(
                 where = await _route(device, volume)
                 speakers = {d.name for d in await music.devices() if d.selected}
                 t0 = time.monotonic()
-                # now and then Music drops a speaker or never streams to it as playback
-                # starts; starting again over a fresh session recovers it
-                for _ in range(2):
-                    # stopped first, so the speakers reconnect in silence
-                    await music.command("stop")
-                    await music.reconnect()
-                    if preset is not None:
-                        await music.run_shortcut(preset)
-                    else:
-                        await music.play_playlist(playlist)
-                    now = await _until_heard(speakers)
-                    if now is not None:
-                        logger.info("played %s in %.1fs", query, time.monotonic() - t0)
-                        break
-                    logger.warning("%s did not reach %s", query, where)
+                # stopped first, so the speakers reconnect in silence
+                await music.command("stop")
+                await music.reconnect()
+                since = time.time()
+                if preset is not None:
+                    await music.run_shortcut(preset)
                 else:
+                    await music.play_playlist(playlist)
+                # now and then Music drops a speaker or never streams to it as the queue
+                # starts; playing it again over a fresh session recovers it
+                now = await _until_heard(speakers, since)
+                if now is None:
+                    logger.warning("%s did not reach %s", query, where)
+                    now = await _replay(speakers)
+                if now is None:
                     await music.command("stop")
                     raise ToolError(
                         f"Music started {query} but {where} never played it."
                     )
+                logger.info("played %s in %.1fs", query, time.monotonic() - t0)
         except music.MusicError as exc:
             raise ToolError(str(exc)) from exc
     return f"{now.describe()} On {where}."
@@ -419,14 +443,8 @@ async def _resume() -> None:
             await music.command("play")
             return
         speakers = {d.name for d in await music.devices() if d.selected}
-        for _ in range(2):
-            await music.reconnect()
-            await music.command("play")
-            if await _until_heard(speakers) is not None:
-                return
-            logger.warning("resuming %s did not reach %s", now.track, speakers)
-            await music.command("pause")
-        raise music.MusicError(f"The speakers never played {now.track}.")
+        if await _replay(speakers) is None:
+            raise music.MusicError(f"The speakers never played {now.track}.")
 
 
 @mcp.tool()
