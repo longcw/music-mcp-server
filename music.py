@@ -28,8 +28,17 @@ class Playing:
     # seconds into the track, and its length
     position: float = 0.0
     duration: float = 0.0
+    # False with no current track, which Music may still call paused: after a stop, or
+    # while a shortcut's queue waits for a play
+    loaded: bool = True
+
+    @property
+    def shown(self) -> str:
+        return self.state if self.loaded else "stopped"
 
     def describe(self) -> str:
+        if not self.loaded:
+            return "Music is stopped."
         if not self.track:
             return f"Music is {self.state}."
         return (
@@ -39,7 +48,11 @@ class Playing:
 
 async def _run(*argv: str, timeout: float = 30) -> str:
     proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *argv,
+        # shortcuts run reads its input from a stdin that is not a terminal
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
@@ -58,10 +71,11 @@ async def osa(body: str, *args: str) -> str:
 
 
 async def devices() -> list[Device]:
+    # every Apple event about AirPlay devices costs Music ~0.4 s, so ask once for all
     out = await osa(
         """set out to ""
-repeat with d in AirPlay devices
-    set out to out & (name of d) & tab & (kind of d as text) & tab & (selected of d as text) & tab & (sound volume of d as text) & tab & (available of d as text) & linefeed
+repeat with p in (get properties of every AirPlay device)
+    set out to out & (name of p) & tab & (kind of p as text) & tab & (selected of p as text) & tab & (sound volume of p as text) & tab & (available of p as text) & linefeed
 end repeat
 return out"""
     )
@@ -142,7 +156,7 @@ end try"""
     )
     state, *rest = out.split("\t")
     if not rest:
-        return Playing(state)
+        return Playing(state, loaded=False)
     track, artist, album, position, duration = rest
     return Playing(state, track, artist, album, _seconds(position), _seconds(duration))
 

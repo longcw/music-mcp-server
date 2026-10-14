@@ -130,6 +130,23 @@ async def _until_moving() -> None:
         await asyncio.sleep(0.25)
 
 
+async def _until_heard(speakers: set[str]) -> music.Playing | None:
+    """Wait for the speakers to play, or None if the track stands still or Music dropped one.
+
+    Music says playing whether or not a speaker takes the stream, so this checks what it
+    does rather than what it says.
+    """
+    await _until_moving()
+    before = await music.now_playing()
+    await asyncio.sleep(1.5)
+    now = await music.now_playing()
+    moved = now.position > before.position or now.track != before.track
+    if now.state != "playing" or not moved:
+        return None
+    selected = {d.name for d in await music.devices() if d.selected}
+    return now if speakers <= selected else None
+
+
 async def _play_catalog(item: catalog.Item) -> music.Playing:
     storefront = settings.storefront
     t0 = time.monotonic()
@@ -254,15 +271,28 @@ async def play_music(
                 if volume is None and preset is not None:
                     volume = settings.preset_volumes.get(preset)
                 where = await _route(device, volume)
-                # stopped first, so the speakers reconnect in silence
-                await music.command("stop")
-                await music.reconnect()
-                if preset is not None:
-                    await music.run_shortcut(preset)
+                speakers = {d.name for d in await music.devices() if d.selected}
+                t0 = time.monotonic()
+                # now and then Music drops a speaker or never streams to it as playback
+                # starts; starting again over a fresh session recovers it
+                for _ in range(2):
+                    # stopped first, so the speakers reconnect in silence
+                    await music.command("stop")
+                    await music.reconnect()
+                    if preset is not None:
+                        await music.run_shortcut(preset)
+                    else:
+                        await music.play_playlist(playlist)
+                    now = await _until_heard(speakers)
+                    if now is not None:
+                        logger.info("played %s in %.1fs", query, time.monotonic() - t0)
+                        break
+                    logger.warning("%s did not reach %s", query, where)
                 else:
-                    await music.play_playlist(playlist)
-                await asyncio.sleep(2)
-                now = await music.now_playing()
+                    await music.command("stop")
+                    raise ToolError(
+                        f"Music started {query} but {where} never played it."
+                    )
         except music.MusicError as exc:
             raise ToolError(str(exc)) from exc
     return f"{now.describe()} On {where}."
@@ -381,11 +411,22 @@ async def set_volume(
 
 
 async def _resume() -> None:
-    """Play on from where Music is, over fresh speaker sessions unless already playing."""
+    """Play on from where Music paused, over fresh speaker sessions, until the speakers play."""
     async with _lock:
-        if (await music.now_playing()).state != "playing":
+        now = await music.now_playing()
+        if now.state != "paused" or not now.loaded:
+            # playing already, or nothing to resume
+            await music.command("play")
+            return
+        speakers = {d.name for d in await music.devices() if d.selected}
+        for _ in range(2):
             await music.reconnect()
-        await music.command("play")
+            await music.command("play")
+            if await _until_heard(speakers) is not None:
+                return
+            logger.warning("resuming %s did not reach %s", now.track, speakers)
+            await music.command("pause")
+        raise music.MusicError(f"The speakers never played {now.track}.")
 
 
 @mcp.tool()
@@ -418,35 +459,45 @@ async def now_playing() -> str:
 # a small REST API beside MCP, for a home automation hub to show and control playback
 
 
+# the last state served, for polls that arrive while playback changes
+_state: dict | None = None
+
+# resumes started from the hub, kept referenced until they finish
+_resumes: set[asyncio.Task] = set()
+
+
 @mcp.custom_route("/api/state", methods=["GET"])
 async def api_state(request: Request) -> JSONResponse:
+    global _state
+    # while playback changes, polls get the last state rather than queue behind it in Music
+    if _lock.locked() and _state is not None:
+        return JSONResponse(_state)
     try:
         now = await music.now_playing()
         devices = await music.devices()
     except music.MusicError as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
     selected = [d for d in devices if d.selected]
-    return JSONResponse(
-        {
-            "state": now.state,
-            "track": now.track,
-            "artist": now.artist,
-            "album": now.album,
-            "position": now.position,
-            "duration": now.duration,
-            "volume": selected[0].volume if selected else None,
-            "devices": [
-                {
-                    "name": d.name,
-                    "kind": d.kind,
-                    "selected": d.selected,
-                    "available": d.available,
-                    "volume": d.volume,
-                }
-                for d in devices
-            ],
-        }
-    )
+    _state = {
+        "state": now.shown,
+        "track": now.track,
+        "artist": now.artist,
+        "album": now.album,
+        "position": now.position,
+        "duration": now.duration,
+        "volume": selected[0].volume if selected else None,
+        "devices": [
+            {
+                "name": d.name,
+                "kind": d.kind,
+                "selected": d.selected,
+                "available": d.available,
+                "volume": d.volume,
+            }
+            for d in devices
+        ],
+    }
+    return JSONResponse(_state)
 
 
 @mcp.custom_route("/api/control", methods=["POST"])
@@ -463,7 +514,17 @@ async def api_control(request: Request) -> JSONResponse:
         return JSONResponse({"error": "unknown action"}, status_code=400)
     try:
         if verb == "play":
-            await _resume()
+
+            async def resume() -> None:
+                try:
+                    await _resume()
+                except music.MusicError as exc:
+                    logger.warning("resume failed: %s", exc)
+
+            # a checked resume can outlast the hub's request, which sees it on a later poll
+            task = asyncio.create_task(resume())
+            _resumes.add(task)
+            task.add_done_callback(_resumes.discard)
         else:
             await music.command(verb)
     except music.MusicError as exc:
